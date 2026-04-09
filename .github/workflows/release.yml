@@ -1,0 +1,21 @@
+name: Release (Test)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Simulate release process (30 min wait)
+        run: |
+          echo "Release workflow started at $(date)"
+          echo "Waiting 30 minutes to simulate a real release..."
+          sleep 1800
+          echo "Release workflow completed at $(date)"
+
+      - name: Create dummy release tag
+        run: |
+          TAG="main_$(date +%Y%m%d)_v0_0_1"
+          echo "Would create tag: $TAG"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
