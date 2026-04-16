@@ -1,0 +1,25 @@
+# テスト用本番デプロイワークフロー (Frontend - Internal)
+# 本番の shk_internal_prod_deploy.yml を擬似再現
+# 20分の待機後に完了する
+name: "[shk][internal][prod] Deploy (Test)"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Deploy info
+        run: |
+          echo "=== [shk][internal][prod] Deploy (Test) - Frontend Internal ==="
+          echo "Ref: ${{ github.ref }}"
+          echo "SHA: ${{ github.sha }}"
+          echo "Started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+      - name: Simulate deploy (20 min)
+        run: |
+          echo "Simulating frontend internal deploy for 1200 seconds..."
+          sleep 1200
+          echo "Deploy simulation complete at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
