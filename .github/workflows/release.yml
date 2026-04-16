@@ -1,21 +1,115 @@
+# テスト用リリースワークフロー
+# - 既存タグからバージョンを取得し、パッチバージョンを自動インクリメント
+# - タグ形式: {TARGET_BRANCH}_{YYYYMMDD}_v{VERSION} (例: main_20250416_v1_0_1)
+# - 本番 release.yml の擬似再現（バージョンファイル管理なし・タグベース）
 name: Release (Test)
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'バージョン番号 (例: 1.2.0)。未入力の場合はパッチバージョンを自動インクリメント'
+        required: false
+        type: string
+      wait_seconds:
+        description: 'リリース処理のシミュレーション待機秒数 (デフォルト: 60)'
+        required: false
+        type: number
+        default: 60
+
+env:
+  TARGET_BRANCH: main
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Simulate release process (30 min wait)
-        run: |
-          echo "Release workflow started at $(date)"
-          echo "Waiting 30 minutes to simulate a real release..."
-          sleep 1800
-          echo "Release workflow completed at $(date)"
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Create dummy release tag
+      - name: Get current version from tags and calculate new version
+        id: version
         run: |
-          TAG="main_$(date +%Y%m%d)_v0_0_1"
-          echo "Would create tag: $TAG"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          # 既存タグからバージョンを取得 (タグ形式: main_YYYYMMDD_vX_Y_Z)
+          LATEST_TAG=$(git tag -l "${TARGET_BRANCH}_*" --sort=-version:refname | head -1)
+
+          if [ -z "$LATEST_TAG" ]; then
+            CURRENT_VERSION="0.0.0"
+          else
+            # main_20250416_v1_0_1 -> 1.0.1
+            CURRENT_VERSION=$(echo "$LATEST_TAG" | sed -E 's/^.*_v([0-9]+)_([0-9]+)_([0-9]+)$/\1.\2.\3/')
+          fi
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "latest_tag=${LATEST_TAG:-(none)}" >> $GITHUB_OUTPUT
+
+          INPUT_VERSION="${{ github.event.inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            # バリデーション: x.x.x 形式チェック
+            if ! echo "$INPUT_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::バージョン形式が不正です: $INPUT_VERSION (x.x.x形式で指定してください)"
+              exit 1
+            fi
+            NEW_VERSION="$INPUT_VERSION"
+          else
+            # デフォルト: パッチバージョンをインクリメント
+            IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+            MAJOR="${VERSION_PARTS[0]}"
+            MINOR="${VERSION_PARTS[1]}"
+            PATCH="${VERSION_PARTS[2]}"
+            NEW_PATCH=$((PATCH + 1))
+            NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+          fi
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Generate tag name
+        id: tag
+        run: |
+          DATE=$(TZ=Asia/Tokyo date '+%Y%m%d')
+          VERSION=${{ steps.version.outputs.new_version }}
+          TAG="${TARGET_BRANCH}_${DATE}_v${VERSION//./_}"
+          echo "tag_name=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Simulate release process
+        run: |
+          WAIT=${{ github.event.inputs.wait_seconds || 60 }}
+          echo "=== Release Simulation ==="
+          echo "Previous tag: ${{ steps.version.outputs.latest_tag }}"
+          echo "Current version: ${{ steps.version.outputs.current_version }}"
+          echo "New version: ${{ steps.version.outputs.new_version }}"
+          echo "Tag: ${{ steps.tag.outputs.tag_name }}"
+          echo ""
+          echo "Waiting ${WAIT}s to simulate release process..."
+          sleep "$WAIT"
+          echo "Simulation complete."
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PREVIOUS_TAG="${{ steps.version.outputs.latest_tag }}"
+          NEW_TAG="${{ steps.tag.outputs.tag_name }}"
+
+          # リリースノート生成
+          if [ "$PREVIOUS_TAG" = "(none)" ]; then
+            COMPARE_BASE="${TARGET_BRANCH}"
+            NOTES="## What's Changed\nTest release $NEW_TAG (initial)\n"
+          else
+            COMPARE_BASE="$PREVIOUS_TAG"
+            NOTES="## What's Changed\nTest release $NEW_TAG (previous: $PREVIOUS_TAG)\n"
+          fi
+          NOTES+="\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/${COMPARE_BASE}...${NEW_TAG}"
+
+          NOTES_FILE=$(mktemp)
+          echo -e "$NOTES" > "$NOTES_FILE"
+
+          gh release create "$NEW_TAG" \
+            --repo "${{ github.repository }}" \
+            --target "${{ env.TARGET_BRANCH }}" \
+            --title "$NEW_TAG" \
+            --notes-file "$NOTES_FILE"
+
+          echo "Release created: $NEW_TAG"
